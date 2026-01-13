@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # WhatsApp Bot - Automatic Sending & Reply System
 
 An automatic WhatsApp messaging bot built with Node.js that can send automated messages and reply to incoming messages without using the official WhatsApp API. This bot uses WhatsApp Web through the `whatsapp-web.js` library.
@@ -281,3 +282,4 @@ MIT
 ## Disclaimer
 
 This bot is for educational and personal use. Make sure to comply with WhatsApp's Terms of Service. The developers are not responsible for any misuse of this software.
+
