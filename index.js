@@ -13,6 +13,11 @@ if (config.aiBot.memory && config.aiBot.memory.enabled) {
   historyManager = new HistoryManager(config.aiBot.memory.limit);
 }
 
+// Map to track processed message IDs to prevent double replies
+const processedMessages = new Set();
+// Clean up cache every hour to prevent memory leaks
+setInterval(() => processedMessages.clear(), 3600000);
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -124,7 +129,7 @@ const client = new Client({
 const scheduledMessages = new Map();
 
 // Initialize the bot
-console.log('🤖 Starting WhatsApp Bot...');
+console.log(`🤖 Starting WhatsApp Bot (PID: ${process.pid})...`);
 
 // Generate QR Code for authentication
 client.on('qr', (qr) => {
@@ -172,6 +177,10 @@ client.on('disconnected', (reason) => {
 
 // Handle incoming messages
 client.on('message', async (message) => {
+  // Prevent duplicate processing
+  if (processedMessages.has(message.id._serialized)) return;
+  processedMessages.add(message.id._serialized);
+
   try {
     // Get contact info
     const chat = await message.getChat();
@@ -328,10 +337,12 @@ client.on('message', async (message) => {
           } else {
             // No tool calls, final response
             const aiReply = responseMessage.content;
-            await message.reply(aiReply);
-            console.log('✅ AI replied:', aiReply);
-
-            messages.push({ role: "assistant", content: aiReply });
+            if (aiReply) {
+              await message.reply(aiReply);
+              console.log('✅ AI replied:', aiReply);
+              messages.push({ role: "assistant", content: aiReply });
+              replied = true; // Set here immediately
+            }
             finalReplySent = true;
           }
         }
