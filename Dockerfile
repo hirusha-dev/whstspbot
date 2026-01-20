@@ -4,6 +4,7 @@ FROM node:20-slim
 RUN apt-get update && apt-get install -y \
     chromium \
     curl \
+    dumb-init \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -26,6 +27,7 @@ RUN apt-get update && apt-get install -y \
 # Set Puppeteer to use installed Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV CHROME_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
@@ -46,4 +48,6 @@ RUN groupadd -r botuser && useradd -r -g botuser botuser
 RUN mkdir -p /app/.wwebjs_auth && chown -R botuser:botuser /app
 USER botuser
 
+# Use dumb-init to handle PID 1 properly
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "index.js"]

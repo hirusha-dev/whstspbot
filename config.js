@@ -154,7 +154,9 @@ When booking:
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--single-process',
+      '--disable-crashpad'
     ],
 
     // Session path (where auth data is stored)
