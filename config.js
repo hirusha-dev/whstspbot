@@ -160,10 +160,7 @@ When booking:
     // Session path (where auth data is stored)
     sessionPath: './.wwebjs_auth',
 
-    // Optional: Path to Chrome/Chromium executable
-    // Uncomment and set if you need to use a specific Chrome installation
-    // executablePath: '/usr/bin/google-chrome-stable',
-    // executablePath: '/usr/bin/chromium-browser',
-    // executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // Windows
+    // Chrome/Chromium executable path (auto-detected from env in Docker)
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null
   }
 };

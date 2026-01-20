@@ -1,0 +1,32 @@
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whatsapp-bot.rule=Host(`wbot.idea8.cloud`)"
+      - "traefik.http.routers.whatsapp-bot.entrypoints=websecure"
+      - "traefik.http.routers.whatsapp-bot.tls.certresolver=letsencrypt"
+      - "traefik.http.services.whatsapp-bot.loadbalancer.server.port=3000"
+      - "traefik.http.routers.whatsapp-bot.middlewares=security-headers"
+    volumes:
+      - whatsapp-session:/app/.wwebjs_auth
+      - ./google_calendar_credentials.json:/app/google_calendar_credentials.json:ro
+    networks:
+      - traefik-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  whatsapp-session:
+
+networks:
+  traefik-net:
+    external: true
