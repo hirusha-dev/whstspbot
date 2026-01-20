@@ -34,6 +34,19 @@ const scheduledMessages = new Map();
 // Bot readiness state for health checks
 let isReady = false;
 
+// Store QR code and logs for web UI
+let currentQR = null;
+let messagesProcessed = 0;
+const logs = [];
+const MAX_LOGS = 100;
+
+function addLog(level, message) {
+  const entry = { time: new Date().toISOString(), level, message };
+  logs.push(entry);
+  if (logs.length > MAX_LOGS) logs.shift();
+  console.log('[' + level.toUpperCase() + '] ' + message);
+}
+
 // OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -50,27 +63,112 @@ if (config.aiBot.calendar?.enabled) {
 }
 
 // ============================================================
-// Health Check Server
+// Web Server (Dashboard, QR, Logs, Health)
 // ============================================================
 const HEALTH_PORT = process.env.HEALTH_PORT || 3000;
 
-const healthServer = http.createServer((req, res) => {
-  if (req.url === '/health' && req.method === 'GET') {
+const dashboardHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp Bot</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,sans-serif;background:#0a0a0a;color:#e5e5e5;padding:20px}
+    .container{max-width:900px;margin:0 auto}
+    h1{color:#22c55e;margin-bottom:20px}
+    .status{display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap}
+    .card{background:#171717;border-radius:8px;padding:16px;flex:1;min-width:200px}
+    .card h3{color:#a3a3a3;font-size:12px;text-transform:uppercase;margin-bottom:8px}
+    .card p{font-size:24px;font-weight:bold}
+    .healthy{color:#22c55e}.starting{color:#eab308}
+    #qr-section{background:#171717;border-radius:8px;padding:20px;margin-bottom:20px;text-align:center}
+    #qr-container{background:white;display:inline-block;padding:16px;border-radius:8px;margin-top:10px}
+    #qr-status{color:#22c55e;font-size:18px}
+    .logs{background:#171717;border-radius:8px;padding:16px}
+    .logs h2{margin-bottom:12px;font-size:16px}
+    #log-container{height:400px;overflow-y:auto;font-family:monospace;font-size:13px}
+    .log-entry{padding:4px 0;border-bottom:1px solid #262626}
+    .log-time{color:#737373}.log-info{color:#3b82f6}.log-error{color:#ef4444}.log-warn{color:#eab308}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>WhatsApp Bot Dashboard</h1>
+    <div class="status">
+      <div class="card"><h3>Status</h3><p id="status">Loading...</p></div>
+      <div class="card"><h3>Uptime</h3><p id="uptime">-</p></div>
+      <div class="card"><h3>Messages</h3><p id="messages">-</p></div>
+    </div>
+    <div id="qr-section">
+      <h2>QR Code</h2>
+      <div id="qr-container"></div>
+    </div>
+    <div class="logs">
+      <h2>Logs</h2>
+      <div id="log-container"></div>
+    </div>
+  </div>
+  <script>
+    async function fetchStatus(){
+      try{
+        const res=await fetch('/api/status');
+        const data=await res.json();
+        document.getElementById('status').textContent=data.status;
+        document.getElementById('status').className=data.status;
+        document.getElementById('uptime').textContent=Math.floor(data.uptime)+'s';
+        document.getElementById('messages').textContent=data.messagesProcessed||0;
+        const qrContainer=document.getElementById('qr-container');
+        if(data.qr){
+          qrContainer.innerHTML='<canvas id="qr-canvas"></canvas>';
+          QRCode.toCanvas(document.getElementById('qr-canvas'),data.qr,{width:256});
+        }else if(data.status==='healthy'){
+          qrContainer.innerHTML='<p id="qr-status">Connected</p>';
+        }else{
+          qrContainer.innerHTML='<p style="color:#737373">Waiting for QR...</p>';
+        }
+      }catch(e){console.error(e)}
+    }
+    async function fetchLogs(){
+      try{
+        const res=await fetch('/api/logs');
+        const data=await res.json();
+        const container=document.getElementById('log-container');
+        container.innerHTML=data.map(l=>'<div class="log-entry"><span class="log-time">'+l.time.substr(11,8)+'</span> <span class="log-'+l.level+'">['+l.level.toUpperCase()+']</span> '+l.message+'</div>').reverse().join('');
+      }catch(e){console.error(e)}
+    }
+    fetchStatus();fetchLogs();
+    setInterval(fetchStatus,3000);
+    setInterval(fetchLogs,2000);
+  </script>
+</body>
+</html>`;
+
+const webServer = http.createServer((req, res) => {
+  const url = req.url.split('?')[0];
+  if (url === '/' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(dashboardHTML);
+  } else if (url === '/health' && req.method === 'GET') {
     const status = isReady ? 200 : 503;
     res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      status: isReady ? 'healthy' : 'starting',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString()
-    }));
+    res.end(JSON.stringify({ status: isReady ? 'healthy' : 'starting', uptime: process.uptime(), timestamp: new Date().toISOString() }));
+  } else if (url === '/api/status' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: isReady ? 'healthy' : 'starting', uptime: process.uptime(), qr: currentQR, messagesProcessed }));
+  } else if (url === '/api/logs' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(logs));
   } else {
     res.writeHead(404);
     res.end();
   }
 });
 
-healthServer.listen(HEALTH_PORT, () => {
-  console.log(`Health check available at http://localhost:${HEALTH_PORT}/health`);
+webServer.listen(HEALTH_PORT, () => {
+  addLog('info', 'Dashboard: http://localhost:' + HEALTH_PORT);
 });
 
 // ============================================================
@@ -175,21 +273,20 @@ const client = new Client({
 // ============================================================
 // Bot Startup & Event Handlers
 // ============================================================
-console.log(`Starting WhatsApp Bot (PID: ${process.pid})...`);
+addLog('info', 'Starting WhatsApp Bot (PID: ' + process.pid + ')');
 
 client.on('qr', (qr) => {
-  console.log('\n📱 Scan this QR code with your WhatsApp:');
+  currentQR = qr;
+  addLog('info', 'QR code generated - scan with WhatsApp');
   qrcode.generate(qr, { small: true });
-  console.log('\n⏳ Waiting for QR code scan...\n');
 });
 
-// Client is ready
 client.on('ready', async () => {
+  currentQR = null;
   isReady = true;
-  console.log('WhatsApp Bot is ready!');
-  console.log('📞 Connected as:', client.info.pushname);
-  console.log('📱 Phone:', client.info.wid.user);
-  console.log('━'.repeat(50));
+  addLog('info', 'WhatsApp Bot is ready!');
+  addLog('info', 'Connected as: ' + client.info.pushname);
+  addLog('info', 'Phone: ' + client.info.wid.user);
 
   // Safety patch for the 'markedUnread' error
   try {
@@ -215,25 +312,24 @@ client.on('ready', async () => {
   }
 
   if (config.autoReply.enabled) {
-    console.log('✉️  Auto-reply is enabled');
+    addLog('info', 'Auto-reply is enabled');
   }
 
-  console.log('\n💬 Bot is now listening for messages...\n');
+  addLog('info', 'Listening for messages');
 });
 
-// Handle authentication
 client.on('authenticated', () => {
-  console.log('🔐 Authentication successful!');
+  addLog('info', 'Authentication successful');
 });
 
-// Handle authentication failure
 client.on('auth_failure', (msg) => {
-  console.error('❌ Authentication failed:', msg);
+  addLog('error', 'Authentication failed: ' + msg);
 });
 
 client.on('disconnected', (reason) => {
   isReady = false;
-  console.log('Client disconnected:', reason);
+  currentQR = null;
+  addLog('warn', 'Disconnected: ' + reason);
   scheduledMessages.forEach(interval => clearInterval(interval));
   scheduledMessages.clear();
 });
@@ -253,9 +349,9 @@ client.on('message', async (message) => {
       number: message.from.split('@')[0] // Clean number
     };
 
-    // Log message if enabled
+    messagesProcessed++;
     if (config.bot.logMessages) {
-      console.log(`📨 Message from ${customerInfo.name} (${message.from}): ${message.body}`);
+      addLog('info', 'Message from ' + customerInfo.name + ': ' + message.body.substring(0, 50));
     }
 
     // Ignore if auto-reply is disabled
@@ -533,12 +629,11 @@ function startAutoSend() {
 // Graceful Shutdown
 // ============================================================
 process.on('SIGINT', async () => {
-  console.log('\nShutting down...');
+  addLog('info', 'Shutting down...');
   scheduledMessages.forEach(interval => clearInterval(interval));
   scheduledMessages.clear();
-  healthServer.close();
+  webServer.close();
   await client.destroy();
-  console.log('Bot stopped');
   process.exit(0);
 });
 
