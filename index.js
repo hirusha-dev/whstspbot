@@ -4,6 +4,7 @@
 const http = require('http');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const { google } = require('googleapis');
 const OpenAI = require('openai');
 require('dotenv').config();
@@ -36,6 +37,7 @@ let isReady = false;
 
 // Store QR code and logs for web UI
 let currentQR = null;
+let currentQRImage = null;
 let messagesProcessed = 0;
 const logs = [];
 const MAX_LOGS = 100;
@@ -86,6 +88,7 @@ const dashboardHTML = `<!DOCTYPE html>
     .healthy{color:#22c55e}.starting{color:#eab308}
     #qr-section{background:#171717;border-radius:8px;padding:20px;margin-bottom:20px;text-align:center}
     #qr-container{background:white;display:inline-block;padding:16px;border-radius:8px;margin-top:10px}
+    #qr-container img{display:block;width:256px;height:256px}
     #qr-status{color:#22c55e;font-size:18px}
     .logs{background:#171717;border-radius:8px;padding:16px}
     .logs h2{margin-bottom:12px;font-size:16px}
@@ -121,9 +124,15 @@ const dashboardHTML = `<!DOCTYPE html>
         document.getElementById('uptime').textContent=Math.floor(data.uptime)+'s';
         document.getElementById('messages').textContent=data.messagesProcessed||0;
         const qrContainer=document.getElementById('qr-container');
-        if(data.qr){
-          qrContainer.innerHTML='<canvas id="qr-canvas"></canvas>';
-          QRCode.toCanvas(document.getElementById('qr-canvas'),data.qr,{width:256});
+        if(data.qrImage){
+          qrContainer.innerHTML='<img src="'+data.qrImage+'" alt="QR code">';
+        }else if(data.qr){
+          if(typeof QRCode !== 'undefined'){
+            qrContainer.innerHTML='<canvas id="qr-canvas"></canvas>';
+            QRCode.toCanvas(document.getElementById('qr-canvas'),data.qr,{width:256});
+          }else{
+            qrContainer.innerHTML='<p style="color:#737373">QR available, renderer missing</p>';
+          }
         }else if(data.status==='healthy'){
           qrContainer.innerHTML='<p id="qr-status">Connected</p>';
         }else{
@@ -160,7 +169,7 @@ const webServer = http.createServer((req, res) => {
     res.end(JSON.stringify({ status: isReady ? 'healthy' : 'starting', uptime: process.uptime(), timestamp: new Date().toISOString() }));
   } else if (url === '/api/status' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: isReady ? 'healthy' : 'starting', uptime: process.uptime(), qr: currentQR, messagesProcessed }));
+    res.end(JSON.stringify({ status: isReady ? 'healthy' : 'starting', uptime: process.uptime(), qr: currentQR, qrImage: currentQRImage, messagesProcessed }));
   } else if (url === '/api/logs' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(logs));
@@ -278,14 +287,21 @@ const client = new Client({
 // ============================================================
 addLog('info', 'Starting WhatsApp Bot (PID: ' + process.pid + ')');
 
-client.on('qr', (qr) => {
+client.on('qr', async (qr) => {
   currentQR = qr;
+  currentQRImage = null;
   addLog('info', 'QR code generated - scan with WhatsApp');
   qrcode.generate(qr, { small: true });
+  try {
+    currentQRImage = await QRCode.toDataURL(qr, { width: 256, margin: 1 });
+  } catch (error) {
+    addLog('warn', 'Failed to render QR image: ' + error.message);
+  }
 });
 
 client.on('ready', async () => {
   currentQR = null;
+  currentQRImage = null;
   isReady = true;
   addLog('info', 'WhatsApp Bot is ready!');
   addLog('info', 'Connected as: ' + client.info.pushname);
@@ -332,6 +348,7 @@ client.on('auth_failure', (msg) => {
 client.on('disconnected', (reason) => {
   isReady = false;
   currentQR = null;
+  currentQRImage = null;
   addLog('warn', 'Disconnected: ' + reason);
   scheduledMessages.forEach(interval => clearInterval(interval));
   scheduledMessages.clear();
