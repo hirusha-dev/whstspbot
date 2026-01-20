@@ -17,7 +17,6 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
     "dotenv": "^17.2.3",
     "googleapis": "^170.0.0",
     "openai": "^6.16.0",

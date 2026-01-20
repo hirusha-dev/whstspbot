@@ -1,31 +1,47 @@
+// ============================================================
+// Dependencies
+// ============================================================
+const http = require('http');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const config = require('./config');
-require('dotenv').config();
+const { google } = require('googleapis');
 const OpenAI = require('openai');
+require('dotenv').config();
+
+// ============================================================
+// Local Modules
+// ============================================================
+const config = require('./config');
 const HistoryManager = require('./history');
 
-const { google } = require('googleapis');
+// ============================================================
+// State & Initialization
+// ============================================================
 
-// Initialize Chat History Manager
+// Chat history manager for conversation context
 let historyManager;
-if (config.aiBot.memory && config.aiBot.memory.enabled) {
+if (config.aiBot.memory?.enabled) {
   historyManager = new HistoryManager(config.aiBot.memory.limit);
 }
 
-// Map to track processed message IDs to prevent double replies
+// Track processed messages to prevent duplicates
 const processedMessages = new Set();
-// Clean up cache every hour to prevent memory leaks
-setInterval(() => processedMessages.clear(), 3600000);
+setInterval(() => processedMessages.clear(), 3600000); // Clear hourly
 
-// Initialize OpenAI client
+// Store for scheduled message intervals
+const scheduledMessages = new Map();
+
+// Bot readiness state for health checks
+let isReady = false;
+
+// OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Initialize Google Calendar Client
+// Google Calendar client
 let calendar;
-if (config.aiBot.calendar && config.aiBot.calendar.enabled) {
+if (config.aiBot.calendar?.enabled) {
   const auth = new google.auth.GoogleAuth({
     keyFile: config.aiBot.calendar.credentialsPath,
     scopes: ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
@@ -33,7 +49,34 @@ if (config.aiBot.calendar && config.aiBot.calendar.enabled) {
   calendar = google.calendar({ version: 'v3', auth });
 }
 
-// Helper: Check Availability
+// ============================================================
+// Health Check Server
+// ============================================================
+const HEALTH_PORT = process.env.HEALTH_PORT || 3000;
+
+const healthServer = http.createServer((req, res) => {
+  if (req.url === '/health' && req.method === 'GET') {
+    const status = isReady ? 200 : 503;
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: isReady ? 'healthy' : 'starting',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+
+healthServer.listen(HEALTH_PORT, () => {
+  console.log(`Health check available at http://localhost:${HEALTH_PORT}/health`);
+});
+
+// ============================================================
+// Calendar Helper Functions
+// ============================================================
+
 async function checkAvailability(startTime, endTime) {
   try {
     const calendarId = config.aiBot.calendar.calendarId;
@@ -68,8 +111,6 @@ async function checkAvailability(startTime, endTime) {
   }
 }
 
-// Helper: Book Meeting
-// Helper: Book Appointment
 async function bookAppointment(serviceId, startTime, guestEmail, customerInfo) {
   try {
     const service = config.services[serviceId];
@@ -108,7 +149,9 @@ async function bookAppointment(serviceId, startTime, guestEmail, customerInfo) {
   }
 }
 
-// Initialize the WhatsApp client
+// ============================================================
+// WhatsApp Client Configuration
+// ============================================================
 const puppeteerConfig = {
   args: config.client.puppeteerArgs
 };
@@ -129,13 +172,11 @@ const client = new Client({
   puppeteer: puppeteerConfig
 });
 
-// Store for scheduled message intervals
-const scheduledMessages = new Map();
+// ============================================================
+// Bot Startup & Event Handlers
+// ============================================================
+console.log(`Starting WhatsApp Bot (PID: ${process.pid})...`);
 
-// Initialize the bot
-console.log(`🤖 Starting WhatsApp Bot (PID: ${process.pid})...`);
-
-// Generate QR Code for authentication
 client.on('qr', (qr) => {
   console.log('\n📱 Scan this QR code with your WhatsApp:');
   qrcode.generate(qr, { small: true });
@@ -144,7 +185,8 @@ client.on('qr', (qr) => {
 
 // Client is ready
 client.on('ready', async () => {
-  console.log('✅ WhatsApp Bot is ready!');
+  isReady = true;
+  console.log('WhatsApp Bot is ready!');
   console.log('📞 Connected as:', client.info.pushname);
   console.log('📱 Phone:', client.info.wid.user);
   console.log('━'.repeat(50));
@@ -189,10 +231,9 @@ client.on('auth_failure', (msg) => {
   console.error('❌ Authentication failed:', msg);
 });
 
-// Handle disconnection
 client.on('disconnected', (reason) => {
-  console.log('⚠️  Client was disconnected:', reason);
-  // Clear all scheduled messages
+  isReady = false;
+  console.log('Client disconnected:', reason);
   scheduledMessages.forEach(interval => clearInterval(interval));
   scheduledMessages.clear();
 });
@@ -204,9 +245,9 @@ client.on('message', async (message) => {
   processedMessages.add(message.id._serialized);
 
   try {
-    // Get contact info
-    const chat = await message.getChat();
+    // Get contact and chat info (fetched once, reused throughout)
     const contact = await message.getContact();
+    const chat = await message.getChat();
     const customerInfo = {
       name: contact.name || contact.pushname || 'Customer',
       number: message.from.split('@')[0] // Clean number
@@ -364,7 +405,6 @@ client.on('message', async (message) => {
             const aiReply = responseMessage.content;
             if (aiReply) {
               try {
-                const chat = await message.getChat();
                 await chat.sendMessage(aiReply);
                 console.log('✅ AI replied:', aiReply);
               } catch (sendError) {
@@ -414,7 +454,6 @@ client.on('message', async (message) => {
       for (const [keyword, response] of Object.entries(config.autoReply.keywords)) {
         if (messageBody.includes(keyword.toLowerCase())) {
           try {
-            const chat = await message.getChat();
             await chat.sendMessage(response);
             console.log(`✅ Auto-replied with keyword: "${keyword}"`);
           } catch (sendError) {
@@ -430,7 +469,6 @@ client.on('message', async (message) => {
     // Send default reply if no keyword matched and default reply is enabled
     if (!replied && config.autoReply.useDefaultReply) {
       try {
-        const chat = await message.getChat();
         await chat.sendMessage(config.autoReply.defaultReply);
         console.log('✅ Auto-replied with default message');
       } catch (sendError) {
@@ -444,7 +482,10 @@ client.on('message', async (message) => {
   }
 });
 
-// Function to send a message
+// ============================================================
+// Utility Functions
+// ============================================================
+
 async function sendMessage(to, message) {
   try {
     await client.sendMessage(to, message);
@@ -456,7 +497,6 @@ async function sendMessage(to, message) {
   }
 }
 
-// Function to start automatic message sending
 function startAutoSend() {
   console.log('\n🚀 Starting automatic message sending...');
 
@@ -489,16 +529,16 @@ function startAutoSend() {
   });
 }
 
-// Graceful shutdown
+// ============================================================
+// Graceful Shutdown
+// ============================================================
 process.on('SIGINT', async () => {
-  console.log('\n\n🛑 Shutting down bot...');
-
-  // Clear all scheduled messages
+  console.log('\nShutting down...');
   scheduledMessages.forEach(interval => clearInterval(interval));
   scheduledMessages.clear();
-
+  healthServer.close();
   await client.destroy();
-  console.log('✅ Bot stopped successfully');
+  console.log('Bot stopped');
   process.exit(0);
 });
 
