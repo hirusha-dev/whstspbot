@@ -151,6 +151,9 @@ const webServer = http.createServer((req, res) => {
   if (url === '/' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(dashboardHTML);
+  } else if (url === '/healthz' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() }));
   } else if (url === '/health' && req.method === 'GET') {
     const status = isReady ? 200 : 503;
     res.writeHead(status, { 'Content-Type': 'application/json' });
