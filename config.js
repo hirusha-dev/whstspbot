@@ -155,7 +155,8 @@ When booking:
       '--no-first-run',
       '--no-zygote',
       '--disable-gpu',
-      '--disable-features=Crashpad'
+      '--single-process',
+      '--disable-crashpad'
     ],
 
     // Session path (where auth data is stored)
