@@ -43,9 +43,10 @@ COPY . .
 # Expose health check port
 EXPOSE 3000
 
-# Run as non-root user
-RUN groupadd -r botuser && useradd -r -g botuser botuser
-RUN mkdir -p /app/.wwebjs_auth && chown -R botuser:botuser /app
+# Create non-root user and set permissions
+RUN useradd -m -u 1001 botuser && \
+    mkdir -p /app/.wwebjs_auth && \
+    chown -R botuser:botuser /app
 USER botuser
 
 # Use dumb-init to handle PID 1 properly
